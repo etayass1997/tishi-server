@@ -30,7 +30,7 @@ def chat():
     data = request.json
     messages = data.get('messages', [])
     username = data.get('username', '')
-    model = data.get('model', 'gemini')
+    model = data.get('model', 'claude')
 
     system = SYSTEM_PROMPT + f"\n\nשם המשתמש: {username}"
 
