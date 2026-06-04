@@ -6,7 +6,7 @@ import os
 import base64
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="*")
 
 SYSTEM_PROMPT = """אתה טישי — סוכן אישי חכם, ישיר ורציני.
 אתה מדבר עברית בלבד.
@@ -21,12 +21,15 @@ SYSTEM_PROMPT = """אתה טישי — סוכן אישי חכם, ישיר ורצ
 def health():
     return jsonify({'status': 'ok'})
 
-@app.route('/chat', methods=['POST'])
+@app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat():
+    if request.method == 'OPTIONS':
+        return '', 204
+
     data = request.json
     messages = data.get('messages', [])
     username = data.get('username', '')
-    model = data.get('model', 'gemini')  # 'gemini' or 'claude'
+    model = data.get('model', 'gemini')
 
     system = SYSTEM_PROMPT + f"\n\nשם המשתמש: {username}"
 
@@ -50,7 +53,6 @@ def call_gemini(messages, system):
         system_instruction=system
     )
 
-    # המרת היסטוריה לפורמט Gemini
     gemini_messages = []
     for m in messages:
         role = 'user' if m['role'] == 'user' else 'model'
