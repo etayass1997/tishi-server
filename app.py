@@ -4,6 +4,7 @@ import google.generativeai as genai
 import anthropic
 import os
 import base64
+import traceback
 
 app = Flask(__name__)
 CORS(app, origins="*")
@@ -40,6 +41,7 @@ def chat():
             reply = call_gemini(messages, system)
         return jsonify({'reply': reply})
     except Exception as e:
+        print("ERROR:", traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 def call_gemini(messages, system):
