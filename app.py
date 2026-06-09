@@ -51,27 +51,26 @@ TOOLS = [
     }
 ]
 
-def brave_search(query):
-    api_key = os.environ.get('BRAVE_API_KEY')
+def web_search(query):
+    api_key = os.environ.get('TAVILY_API_KEY')
     if not api_key:
-        return "BRAVE_API_KEY לא מוגדר בשרת."
+        return "TAVILY_API_KEY לא מוגדר בשרת."
     try:
-        resp = http_requests.get(
-            'https://api.search.brave.com/res/v1/web/search',
-            headers={'X-Subscription-Token': api_key, 'Accept': 'application/json'},
-            params={'q': query, 'count': 5},
+        resp = http_requests.post(
+            'https://api.tavily.com/search',
+            json={'api_key': api_key, 'query': query, 'max_results': 5},
             timeout=10
         )
         data = resp.json()
-        results = data.get('web', {}).get('results', [])
+        results = data.get('results', [])
         if not results:
             return "לא נמצאו תוצאות."
         parts = []
         for r in results[:5]:
             title = r.get('title', '')
-            desc = r.get('description', '')
+            content = r.get('content', '')
             url = r.get('url', '')
-            parts.append(f"{title}\n{desc}\n{url}")
+            parts.append(f"{title}\n{content}\n{url}")
         return '\n\n'.join(parts)
     except Exception as e:
         return f"שגיאת חיפוש: {e}"
@@ -81,7 +80,7 @@ def health():
     return jsonify({
         'status': 'ok',
         'claude': bool(os.environ.get('ANTHROPIC_API_KEY')),
-        'search': bool(os.environ.get('BRAVE_API_KEY')),
+        'search': bool(os.environ.get('TAVILY_API_KEY')),
     })
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
@@ -126,7 +125,7 @@ def call_claude(messages, system):
 
         if response.stop_reason == 'tool_use':
             tool_block = next(b for b in response.content if b.type == 'tool_use')
-            search_result = brave_search(tool_block.input.get('query', ''))
+            search_result = web_search(tool_block.input.get('query', ''))
 
             msgs.append({'role': 'assistant', 'content': response.content})
             msgs.append({
