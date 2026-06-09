@@ -1,6 +1,6 @@
-# טישי — שרת
+# תישי — שרת
 
-שרת Python/Flask עבור אפליקציית טישי.
+שרת Python/Flask עבור אפליקציית תישי.
 
 ## משתני סביבה (Environment Variables)
 - `GEMINI_API_KEY` — מפתח Gemini (חובה)

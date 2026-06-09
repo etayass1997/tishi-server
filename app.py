@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import anthropic
+import requests as http_requests
 import os
 import base64
 
@@ -8,8 +9,9 @@ app = Flask(__name__)
 CORS(app, origins="*")
 
 SYSTEM_PROMPT_TEMPLATE = """אתה תישי — הסוכן האישי של {username}.
-אתה רץ כאפליקציית דפדפן מחוברת לשרת. אתה מחובר ופעיל — אל תאמר שאתה לא מחובר לאינטרנט.
-אתה לא יכול לגלוש לאתרים או לחפש מידע בזמן אמת, אבל אתה מחובר דרך השרת ומסוגל לעזור.
+אתה רץ כאפליקציית דפדפן מחוברת לשרת עם גישה לאינטרנט.
+יש לך כלי חיפוש — השתמש בו כשמישהו שואל על מידע עדכני, מחירים, חדשות, מזג אוויר, או כל דבר שדורש מידע מהאינטרנט.
+כשמחפשים — חפש, קרא את התוצאות, וענה בעברית בצורה תמציתית. אל תציג את הלינקים אלא אם מבקשים.
 כשיוצרים מסמך או קובץ — כתוב את התוכן בצורה מסודרת. המשתמש יכול להוריד אותו מהממשק.
 
 כללי יסוד:
@@ -26,17 +28,60 @@ SYSTEM_PROMPT_TEMPLATE = """אתה תישי — הסוכן האישי של {user
 
 כשמשהו שגוי — אומר ישר, בלי ריפוד. "זה לא מדויק — " ומסביר בקצרה.
 
-כשלא יודע — "לא יודע." בלי המצאות.
+כשלא יודע — חפש קודם. אם גם החיפוש לא עוזר — "לא יודע."
 
 כשמישהו אומר "זכור ש..." — אתה מאשר בקצרה שזכרת, ותשתמש בזה מעכשיו.
 
 {facts_section}"""
+
+TOOLS = [
+    {
+        "name": "web_search",
+        "description": "מחפש מידע עדכני באינטרנט. השתמש כשצריך מידע שלא ידוע לך: חדשות, מחירים, מזג אוויר, אנשים, חברות, מוצרים, תרגומים, או כל מידע שמשתנה בזמן.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "שאילתת חיפוש. כתוב בעברית או אנגלית, תלוי בנושא."
+                }
+            },
+            "required": ["query"]
+        }
+    }
+]
+
+def brave_search(query):
+    api_key = os.environ.get('BRAVE_API_KEY')
+    if not api_key:
+        return "BRAVE_API_KEY לא מוגדר בשרת."
+    try:
+        resp = http_requests.get(
+            'https://api.search.brave.com/res/v1/web/search',
+            headers={'X-Subscription-Token': api_key, 'Accept': 'application/json'},
+            params={'q': query, 'count': 5},
+            timeout=10
+        )
+        data = resp.json()
+        results = data.get('web', {}).get('results', [])
+        if not results:
+            return "לא נמצאו תוצאות."
+        parts = []
+        for r in results[:5]:
+            title = r.get('title', '')
+            desc = r.get('description', '')
+            url = r.get('url', '')
+            parts.append(f"{title}\n{desc}\n{url}")
+        return '\n\n'.join(parts)
+    except Exception as e:
+        return f"שגיאת חיפוש: {e}"
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
         'status': 'ok',
         'claude': bool(os.environ.get('ANTHROPIC_API_KEY')),
+        'search': bool(os.environ.get('BRAVE_API_KEY')),
     })
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
@@ -47,7 +92,6 @@ def chat():
     data = request.json
     messages = data.get('messages', [])
     username = data.get('username', '')
-    model = data.get('model', 'gemini')
     user_facts = data.get('user_facts', [])
 
     facts_section = ""
@@ -69,13 +113,35 @@ def call_claude(messages, system):
         raise Exception('ANTHROPIC_API_KEY לא מוגדר בשרת')
 
     client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model='claude-sonnet-4-6',
-        max_tokens=1000,
-        system=system,
-        messages=messages
-    )
-    return response.content[0].text
+    msgs = list(messages)
+
+    for _ in range(5):
+        response = client.messages.create(
+            model='claude-sonnet-4-6',
+            max_tokens=2000,
+            system=system,
+            tools=TOOLS,
+            messages=msgs
+        )
+
+        if response.stop_reason == 'tool_use':
+            tool_block = next(b for b in response.content if b.type == 'tool_use')
+            search_result = brave_search(tool_block.input.get('query', ''))
+
+            msgs.append({'role': 'assistant', 'content': response.content})
+            msgs.append({
+                'role': 'user',
+                'content': [{
+                    'type': 'tool_result',
+                    'tool_use_id': tool_block.id,
+                    'content': search_result
+                }]
+            })
+        else:
+            text_blocks = [b for b in response.content if hasattr(b, 'text')]
+            return text_blocks[0].text if text_blocks else ''
+
+    return 'לא הצלחתי לסיים את החיפוש.'
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
