@@ -4,6 +4,28 @@ import anthropic
 import requests as http_requests
 import os
 import base64
+import io
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from bidi.algorithm import get_display
+
+HEBREW_FONT_REGISTERED = False
+HEBREW_FONT_PATH = '/tmp/alef-regular.ttf'
+
+def ensure_hebrew_font():
+    global HEBREW_FONT_REGISTERED
+    if HEBREW_FONT_REGISTERED:
+        return
+    if not os.path.exists(HEBREW_FONT_PATH):
+        font_url = 'https://github.com/google/fonts/raw/main/ofl/alef/Alef-Regular.ttf'
+        resp = http_requests.get(font_url, timeout=20)
+        resp.raise_for_status()
+        with open(HEBREW_FONT_PATH, 'wb') as f:
+            f.write(resp.content)
+    pdfmetrics.registerFont(TTFont('Alef', HEBREW_FONT_PATH))
+    HEBREW_FONT_REGISTERED = True
 
 app = Flask(__name__)
 CORS(app, origins="*")
@@ -116,33 +138,93 @@ def call_claude(messages, system):
     client = anthropic.Anthropic(api_key=api_key)
     msgs = list(messages)
 
-    for _ in range(5):
+    for _ in range(8):
         response = client.messages.create(
             model='claude-sonnet-4-6',
-            max_tokens=2000,
+            max_tokens=3000,
             system=system,
             tools=TOOLS,
             messages=msgs
         )
 
         if response.stop_reason == 'tool_use':
-            tool_block = next(b for b in response.content if b.type == 'tool_use')
-            search_result = web_search(tool_block.input.get('query', ''))
+            tool_blocks = [b for b in response.content if b.type == 'tool_use']
+            tool_results = []
+            for block in tool_blocks:
+                search_result = web_search(block.input.get('query', ''))
+                tool_results.append({
+                    'type': 'tool_result',
+                    'tool_use_id': block.id,
+                    'content': search_result
+                })
 
             msgs.append({'role': 'assistant', 'content': response.content})
-            msgs.append({
-                'role': 'user',
-                'content': [{
-                    'type': 'tool_result',
-                    'tool_use_id': tool_block.id,
-                    'content': search_result
-                }]
-            })
+            msgs.append({'role': 'user', 'content': tool_results})
         else:
             text_blocks = [b for b in response.content if hasattr(b, 'text')]
             return text_blocks[0].text if text_blocks else ''
 
     return 'לא הצלחתי לסיים את החיפוש.'
+
+@app.route('/create-pdf', methods=['POST', 'OPTIONS'])
+def create_pdf():
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    data = request.json or {}
+    title = data.get('title', '')
+    content = data.get('content', '')
+    filename = data.get('filename', 'document.pdf')
+
+    try:
+        ensure_hebrew_font()
+
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+        margin = 40
+
+        c.setFont('Alef', 22)
+        c.drawRightString(width - margin, height - 60, get_display(title))
+
+        c.setLineWidth(0.5)
+        c.line(margin, height - 72, width - margin, height - 72)
+
+        c.setFont('Alef', 13)
+        y = height - 100
+        line_height = 20
+
+        for paragraph in content.split('\n'):
+            words = paragraph.split(' ')
+            line = ''
+            for word in words:
+                test = (word + ' ' + line).strip()
+                if c.stringWidth(test, 'Alef', 13) > (width - 2 * margin):
+                    if y < margin + line_height:
+                        c.showPage()
+                        c.setFont('Alef', 13)
+                        y = height - margin
+                    c.drawRightString(width - margin, y, get_display(line.strip()))
+                    y -= line_height
+                    line = word
+                else:
+                    line = test
+            if line:
+                if y < margin + line_height:
+                    c.showPage()
+                    c.setFont('Alef', 13)
+                    y = height - margin
+                c.drawRightString(width - margin, y, get_display(line.strip()))
+                y -= line_height
+            y -= 4
+
+        c.save()
+        pdf_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        return jsonify({'pdf_base64': pdf_b64, 'filename': filename})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
