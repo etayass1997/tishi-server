@@ -4,6 +4,28 @@ import anthropic
 import requests as http_requests
 import os
 import base64
+import io
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from bidi.algorithm import get_display
+
+HEBREW_FONT_REGISTERED = False
+HEBREW_FONT_PATH = '/tmp/alef-regular.ttf'
+
+def ensure_hebrew_font():
+    global HEBREW_FONT_REGISTERED
+    if HEBREW_FONT_REGISTERED:
+        return
+    if not os.path.exists(HEBREW_FONT_PATH):
+        font_url = 'https://github.com/google/fonts/raw/main/ofl/alef/Alef-Regular.ttf'
+        resp = http_requests.get(font_url, timeout=20)
+        resp.raise_for_status()
+        with open(HEBREW_FONT_PATH, 'wb') as f:
+            f.write(resp.content)
+    pdfmetrics.registerFont(TTFont('Alef', HEBREW_FONT_PATH))
+    HEBREW_FONT_REGISTERED = True
 
 app = Flask(__name__)
 CORS(app, origins="*")
@@ -14,7 +36,19 @@ SYSTEM_PROMPT_TEMPLATE = """אתה תישי — הסוכן האישי של {user
 יש לך גישה לאינטרנט דרך כלי חיפוש (web_search). אתה מחובר. כשמישהו שואל אם יש לך גישה לאינטרנט — התשובה היא **כן**.
 השתמש ב-web_search בכל פעם שצריך מידע עדכני: מחירים, חדשות, מזג אוויר, אנשים, חברות, שעות פתיחה, כל דבר שמשתנה בזמן.
 כשמחפשים — חפש, קרא את התוצאות, וענה בעברית תמציתית. אל תציג לינקים אלא אם מבקשים.
-כשיוצרים מסמך — כתוב תוכן מסודר. המשתמש יכול להוריד אותו.
+
+## יצירת מסמך PDF
+כשמישהו מבקש ליצור מסמך, סיכום, דוח, מכתב, הצעת מחיר, תוכנית, רשימה מסודרת, חוזה, או כל תוכן שמיועד להורדה — כתוב את התוכן המלא ומסודר בפורמט הזה בדיוק:
+
+[PDF:כותרת המסמך]
+תוכן המסמך כאן, שורה אחרי שורה.
+[/PDF]
+
+חוקים:
+- אל תוסיף שום טקסט לפני הבלוק או אחריו — רק הבלוק עצמו.
+- הכותרת תופיע ב-[PDF:...] — בחר כותרת תמציתית ומדויקת.
+- התוכן יכול להיות ארוך. כתוב הכל.
+- אם צריך מידע מהאינטרנט לצורך המסמך — חפש קודם, ואז כתוב.
 
 כללי יסוד:
 - עברית בלבד.
@@ -123,7 +157,7 @@ def call_claude(messages, system):
     for _ in range(5):
         response = client.messages.create(
             model='claude-sonnet-4-6',
-            max_tokens=2000,
+            max_tokens=4000,
             system=system,
             tools=TOOLS,
             messages=msgs
@@ -147,6 +181,65 @@ def call_claude(messages, system):
             return text_blocks[0].text if text_blocks else ''
 
     return 'לא הצלחתי לסיים את החיפוש.'
+
+@app.route('/create-pdf', methods=['POST', 'OPTIONS'])
+def create_pdf():
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    data = request.json or {}
+    title = data.get('title', '')
+    content = data.get('content', '')
+    filename = data.get('filename', 'document.pdf')
+
+    try:
+        ensure_hebrew_font()
+
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+        margin = 40
+
+        c.setFont('Alef', 22)
+        c.drawRightString(width - margin, height - 60, get_display(title))
+
+        c.setLineWidth(0.5)
+        c.line(margin, height - 72, width - margin, height - 72)
+
+        c.setFont('Alef', 13)
+        y = height - 100
+        line_height = 20
+
+        for paragraph in content.split('\n'):
+            words = paragraph.split(' ')
+            line = ''
+            for word in words:
+                test = (word + ' ' + line).strip()
+                if c.stringWidth(test, 'Alef', 13) > (width - 2 * margin):
+                    if y < margin + line_height:
+                        c.showPage()
+                        c.setFont('Alef', 13)
+                        y = height - margin
+                    c.drawRightString(width - margin, y, get_display(line.strip()))
+                    y -= line_height
+                    line = word
+                else:
+                    line = test
+            if line:
+                if y < margin + line_height:
+                    c.showPage()
+                    c.setFont('Alef', 13)
+                    y = height - margin
+                c.drawRightString(width - margin, y, get_display(line.strip()))
+                y -= line_height
+            y -= 4
+
+        c.save()
+        pdf_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        return jsonify({'pdf_base64': pdf_b64, 'filename': filename})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
