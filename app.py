@@ -156,8 +156,9 @@ def call_claude(messages, system):
 
     for _ in range(5):
         response = client.messages.create(
-            model='claude-sonnet-4-6',
-            max_tokens=4000,
+            model='claude-sonnet-5',
+            max_tokens=5000,
+            thinking={'type': 'disabled'},
             system=system,
             tools=TOOLS,
             messages=msgs
