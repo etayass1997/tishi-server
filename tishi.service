@@ -1,0 +1,14 @@
+[Unit]
+Description=Tishi AI Agent (port 5008)
+After=network.target
+
+[Service]
+User=malloy
+WorkingDirectory=/home/malloy/agents/tishi
+EnvironmentFile=/home/malloy/agents/tishi/.env
+ExecStart=/home/malloy/agents/tishi/venv/bin/gunicorn app:app --bind 0.0.0.0:5008 --timeout 120
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,34 +1,37 @@
+import os
+import io
+import base64
+from functools import wraps
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import anthropic
 import requests as http_requests
-import os
-import base64
-import io
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from bidi.algorithm import get_display
 
-HEBREW_FONT_REGISTERED = False
-HEBREW_FONT_PATH = '/tmp/alef-regular.ttf'
-
-def ensure_hebrew_font():
-    global HEBREW_FONT_REGISTERED
-    if HEBREW_FONT_REGISTERED:
-        return
-    if not os.path.exists(HEBREW_FONT_PATH):
-        font_url = 'https://github.com/google/fonts/raw/main/ofl/alef/Alef-Regular.ttf'
-        resp = http_requests.get(font_url, timeout=20)
-        resp.raise_for_status()
-        with open(HEBREW_FONT_PATH, 'wb') as f:
-            f.write(resp.content)
-    pdfmetrics.registerFont(TTFont('Alef', HEBREW_FONT_PATH))
-    HEBREW_FONT_REGISTERED = True
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+HEBREW_FONT_PATH = os.path.join(BASE_DIR, 'assets', 'Alef-Regular.ttf')
 
 app = Flask(__name__)
 CORS(app, origins="*")
+
+API_KEY = os.environ.get('TISHI_API_KEY')
+
+
+def require_api_key(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if request.method == 'OPTIONS':
+            return fn(*args, **kwargs)
+        if API_KEY and request.headers.get('X-API-Key') != API_KEY:
+            return jsonify({'error': 'unauthorized'}), 401
+        return fn(*args, **kwargs)
+    return wrapper
+
 
 SYSTEM_PROMPT_TEMPLATE = """אתה תישי — הסוכן האישי של {username}.
 
@@ -91,6 +94,7 @@ TOOLS = [
     }
 ]
 
+
 def web_search(query):
     api_key = os.environ.get('TAVILY_API_KEY')
     if not api_key:
@@ -115,15 +119,19 @@ def web_search(query):
     except Exception as e:
         return f"שגיאת חיפוש: {e}"
 
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
         'status': 'ok',
         'claude': bool(os.environ.get('ANTHROPIC_API_KEY')),
         'search': bool(os.environ.get('TAVILY_API_KEY')),
+        'auth': bool(API_KEY),
     })
 
+
 @app.route('/chat', methods=['POST', 'OPTIONS'])
+@require_api_key
 def chat():
     if request.method == 'OPTIONS':
         return '', 204
@@ -145,6 +153,7 @@ def chat():
         return jsonify({'reply': reply})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 def call_claude(messages, system):
     api_key = os.environ.get('ANTHROPIC_API_KEY')
@@ -183,7 +192,14 @@ def call_claude(messages, system):
 
     return 'לא הצלחתי לסיים את החיפוש.'
 
+
+def ensure_hebrew_font():
+    if 'Alef' not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont('Alef', HEBREW_FONT_PATH))
+
+
 @app.route('/create-pdf', methods=['POST', 'OPTIONS'])
+@require_api_key
 def create_pdf():
     if request.method == 'OPTIONS':
         return '', 204
@@ -242,6 +258,7 @@ def create_pdf():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5008))
     app.run(host='0.0.0.0', port=port)
