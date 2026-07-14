@@ -15,11 +15,19 @@ from bidi.algorithm import get_display
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HEBREW_FONT_PATH = os.path.join(BASE_DIR, 'assets', 'Alef-Regular.ttf')
+WEB_DIR = os.path.join(BASE_DIR, 'web')
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=WEB_DIR, static_url_path='')
 CORS(app, origins="*")
 
 API_KEY = os.environ.get('TISHI_API_KEY')
+
+
+@app.route('/')
+def index():
+    with open(os.path.join(WEB_DIR, 'index.html'), encoding='utf-8') as f:
+        html = f.read()
+    return html.replace('__API_KEY__', API_KEY or '')
 
 
 def require_api_key(fn):
