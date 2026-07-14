@@ -1,17 +1,19 @@
 # תישי — שרת
 
-שרת Python/Flask עבור תישי, העוזר האישי — צ'אט עם Claude + חיפוש אינטרנט (Tavily) + יצירת PDF בעברית.
+שרת Python/Flask עבור תישי, העוזר האישי — צ'אט עם Claude (כולל תמונות/Vision) + חיפוש אינטרנט (Tavily) + תמלול קול (Groq Whisper) + יצירת PDF בעברית. כולל דף צ'אט (PWA) שרץ מאותו השרת ב-`/`.
 
 ## Endpoints
 - `GET /health` — סטטוס השרת (בלי אימות).
-- `POST /chat` — שיחה. גוף הבקשה: `{"messages": [...], "username": "...", "user_facts": [...]}`.
+- `POST /chat` — שיחה. גוף הבקשה: `{"messages": [...], "username": "...", "user_facts": [...]}`. תוכן הודעה יכול להיות מחרוזת או מערך בלוקים בפורמט Claude (טקסט/תמונה) לתמיכה בתמונות.
+- `POST /transcribe` — תמלול קובץ שמע ל-multipart form עם שדה `file`. מחזיר `{"transcript": "..."}`.
 - `POST /create-pdf` — יצירת PDF בעברית. גוף הבקשה: `{"title": "...", "content": "...", "filename": "..."}`.
 
-`/chat` ו-`/create-pdf` דורשים header `X-API-Key` שתואם למשתנה הסביבה `TISHI_API_KEY` (אם הוגדר).
+`/chat`, `/transcribe` ו-`/create-pdf` דורשים header `X-API-Key` שתואם למשתנה הסביבה `TISHI_API_KEY` (אם הוגדר).
 
 ## משתני סביבה
 - `ANTHROPIC_API_KEY` — מפתח Claude (חובה)
 - `TAVILY_API_KEY` — מפתח חיפוש אינטרנט (אופציונלי, בלעדיו החיפוש לא יעבוד)
+- `GROQ_API_KEY` — מפתח לתמלול קול דרך Whisper (אופציונלי, בלעדיו הקלטה/שמע לא יעבדו)
 - `TISHI_API_KEY` — סוד משותף לאימות בקשות (מומלץ מאוד כשהשרת חשוף מעבר ל-localhost)
 - `PORT` — פורט האזנה (ברירת מחדל 5008)
 

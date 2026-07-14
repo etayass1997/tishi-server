@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>תישי</title>
-<meta name="theme-color" content="#1e293b">
+<meta name="theme-color" content="#0f172a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="תישי">
@@ -16,36 +16,85 @@
 <body>
 <div id="app">
   <header>
-    <h1>תישי</h1>
-    <button id="settings-btn" aria-label="הגדרות" title="הגדרות">⚙</button>
+    <div class="brand">
+      <img class="brand-avatar" src="/icon-192.png" alt="">
+      <div class="brand-text">
+        <span class="brand-name">תישי</span>
+        <span class="brand-sub">העוזר האישי שלך</span>
+      </div>
+    </div>
+    <button id="settings-btn" class="icon-btn" aria-label="הגדרות" title="הגדרות">⚙</button>
   </header>
 
-  <main id="messages"></main>
-  <div id="typing" class="hidden">תישי כותב...</div>
+  <main id="scroll-area">
+    <div id="welcome" class="welcome">
+      <img class="welcome-avatar" src="/icon-192.png" alt="">
+      <h2>היי, איך אפשר לעזור?</h2>
+      <div class="suggestions">
+        <button class="suggestion" type="button">תכתוב לי סיכום קצר של החדשות היום</button>
+        <button class="suggestion" type="button">עזור לי לנסח מייל מקצועי</button>
+        <button class="suggestion" type="button">מה מזג האוויר מחר?</button>
+        <button class="suggestion" type="button">תכין לי PDF עם רשימת קניות</button>
+      </div>
+    </div>
+
+    <div id="messages"></div>
+
+    <div id="typing" class="typing hidden">
+      <div class="msg-row">
+        <img class="avatar" src="/icon-192.png" alt="">
+        <div class="msg msg-assistant typing-bubble"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+  </main>
+
+  <div id="attachments-preview" class="attachments-preview hidden"></div>
+
+  <div id="recording-bar" class="recording-bar hidden">
+    <span class="rec-dot"></span>
+    <span>מקליט...</span>
+    <span id="rec-timer">0:00</span>
+    <button type="button" id="rec-cancel">ביטול</button>
+    <button type="button" id="rec-stop">סיים והמר לטקסט</button>
+  </div>
 
   <form id="composer">
-    <textarea id="input" placeholder="כתוב הודעה לתישי..." rows="1"></textarea>
-    <button type="submit" id="send-btn" aria-label="שלח">➤</button>
+    <div class="composer-inner">
+      <button type="button" id="attach-btn" class="icon-btn" title="צירוף קובץ">📎</button>
+      <textarea id="input" placeholder="כתוב הודעה לתישי..." rows="1"></textarea>
+      <button type="button" id="mic-btn" class="icon-btn" title="הקלטת הודעה קולית">🎤</button>
+      <button type="submit" id="send-btn" class="icon-btn send" title="שלח" aria-label="שלח">➤</button>
+    </div>
   </form>
+
+  <input type="file" id="image-input" accept="image/*" multiple hidden>
+  <input type="file" id="text-file-input" accept=".txt,.md,.csv,.json,.log" multiple hidden>
+  <input type="file" id="audio-file-input" accept="audio/*" hidden>
+
+  <div id="attach-menu" class="attach-menu hidden">
+    <button type="button" data-target="image-input">🖼 תמונה</button>
+    <button type="button" data-target="text-file-input">📄 קובץ טקסט</button>
+    <button type="button" data-target="audio-file-input">🎵 קובץ שמע</button>
+  </div>
 </div>
 
 <div id="settings-modal" class="modal hidden">
   <div class="modal-content">
     <h2>הגדרות</h2>
 
-    <label for="username-input">השם שלך</label>
-    <input id="username-input" type="text">
+    <label for="username-input">השם שלך (אופציונלי)</label>
+    <input id="username-input" type="text" placeholder="איך תישי יקרא לך?">
 
     <label>דברים שתישי זוכר עליך</label>
     <div id="facts-list"></div>
     <div class="fact-add">
       <input id="fact-input" type="text" placeholder="עובדה חדשה...">
-      <button id="fact-add-btn">הוסף</button>
+      <button type="button" id="fact-add-btn">הוסף</button>
     </div>
 
     <div class="modal-actions">
-      <button id="clear-chat-btn" class="danger">נקה שיחה</button>
-      <button id="close-settings-btn">סגור</button>
+      <button type="button" id="clear-chat-btn" class="danger">נקה שיחה</button>
+      <button type="button" id="close-settings-btn">סגור</button>
     </div>
   </div>
 </div>

@@ -41,7 +41,7 @@ def require_api_key(fn):
     return wrapper
 
 
-SYSTEM_PROMPT_TEMPLATE = """אתה תישי — הסוכן האישי של {username}.
+SYSTEM_PROMPT_TEMPLATE = """{intro}
 
 ## יכולות
 יש לך גישה לאינטרנט דרך כלי חיפוש (web_search). אתה מחובר. כשמישהו שואל אם יש לך גישה לאינטרנט — התשובה היא **כן**.
@@ -134,8 +134,42 @@ def health():
         'status': 'ok',
         'claude': bool(os.environ.get('ANTHROPIC_API_KEY')),
         'search': bool(os.environ.get('TAVILY_API_KEY')),
+        'transcribe': bool(os.environ.get('GROQ_API_KEY')),
         'auth': bool(API_KEY),
     })
+
+
+@app.route('/transcribe', methods=['POST', 'OPTIONS'])
+@require_api_key
+def transcribe():
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        return jsonify({'error': 'GROQ_API_KEY לא מוגדר בשרת'}), 500
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'לא התקבל קובץ אודיו'}), 400
+
+    audio = request.files['file']
+    try:
+        resp = http_requests.post(
+            'https://api.groq.com/openai/v1/audio/transcriptions',
+            headers={'Authorization': f'Bearer {api_key}'},
+            files={'file': (audio.filename or 'audio.webm', audio.stream, audio.mimetype or 'audio/webm')},
+            data={'model': 'whisper-large-v3', 'language': 'he', 'response_format': 'json'},
+            timeout=120
+        )
+        if resp.status_code != 200:
+            detail = resp.json().get('error', {}).get('message', resp.text[:200])
+            return jsonify({'error': f'שגיאת תמלול: {detail}'}), 502
+        text = resp.json().get('text', '').strip()
+        if not text:
+            return jsonify({'error': 'התמלול חזר ריק'}), 422
+        return jsonify({'transcript': text})
+    except Exception as e:
+        return jsonify({'error': f'שגיאת תמלול: {e}'}), 500
 
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
@@ -146,15 +180,18 @@ def chat():
 
     data = request.json
     messages = data.get('messages', [])
-    username = data.get('username', '')
+    username = (data.get('username') or '').strip()
     user_facts = data.get('user_facts', [])
+
+    intro = f"אתה תישי — הסוכן האישי של {username}." if username else "אתה תישי — עוזר אישי כללי, שיודע לענות על כל דבר."
 
     facts_section = ""
     if user_facts:
         lines = "\n".join(f"- {f}" for f in user_facts)
-        facts_section = f"מה שאתה זוכר על {username}:\n{lines}"
+        who = username or "המשתמש"
+        facts_section = f"מה שאתה זוכר על {who}:\n{lines}"
 
-    system = SYSTEM_PROMPT_TEMPLATE.replace('{username}', username).replace('{facts_section}', facts_section)
+    system = SYSTEM_PROMPT_TEMPLATE.replace('{intro}', intro).replace('{facts_section}', facts_section)
 
     try:
         reply = call_claude(messages, system)
