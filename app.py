@@ -1,9 +1,11 @@
 import os
 import io
+import re
+import json
 import base64
 from functools import wraps
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import anthropic
 import requests as http_requests
@@ -21,6 +23,8 @@ app = Flask(__name__, static_folder=WEB_DIR, static_url_path='')
 CORS(app, origins="*")
 
 API_KEY = os.environ.get('TISHI_API_KEY')
+GEMINI_IMAGE_MODEL = os.environ.get('GEMINI_IMAGE_MODEL', 'gemini-2.5-flash-image')
+PDF_RE = re.compile(r'\[PDF:([^\]]*)\]([\s\S]*?)\[/PDF\]')
 
 
 @app.route('/')
@@ -61,6 +65,9 @@ SYSTEM_PROMPT_TEMPLATE = """{intro}
 - התוכן יכול להיות ארוך. כתוב הכל.
 - אם צריך מידע מהאינטרנט לצורך המסמך — חפש קודם, ואז כתוב.
 
+## יצירה ועריכת תמונות
+יש לך כלי ליצירת תמונות (generate_image). כשמבקשים לצייר, לעצב, ליצור לוגו/איור/תמונה — השתמש בכלי עם prompt מפורט ועשיר בפרטים (מומלץ באנגלית, נותן תוצאה טובה יותר). אם המשתמש צירף תמונה בהודעה האחרונה שלו וביקש לשנות/לשפר/לערוך אותה — הכלי יערוך אותה אוטומטית לפי ההנחיה, אל תבקש ממנו לצרף שוב. אחרי שהתמונה נוצרה היא כבר מוצגת למשתמש — הגב במשפט אחד קצר, אל תתאר את התמונה במילים.
+
 כללי יסוד:
 - עברית בלבד.
 - עונה בתמציתיות. אם אפשר בשורה אחת — שורה אחת.
@@ -99,6 +106,20 @@ TOOLS = [
             },
             "required": ["query"]
         }
+    },
+    {
+        "name": "generate_image",
+        "description": "יוצר תמונה חדשה מטקסט, או עורך תמונה שהמשתמש צירף בהודעה האחרונה (אם יש תמונה שם, הכלי עורך אותה לפי ההנחיה; אחרת יוצר תמונה חדשה מאפס). השתמש כשמבקשים ליצור, לצייר, לעצב, או לערוך תמונה/לוגו/איור.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "תיאור מפורט של התמונה הרצויה או של השינוי המבוקש (מומלץ באנגלית)."
+                }
+            },
+            "required": ["prompt"]
+        }
     }
 ]
 
@@ -128,6 +149,58 @@ def web_search(query):
         return f"שגיאת חיפוש: {e}"
 
 
+def extract_last_user_images(msgs):
+    """Return image blocks from the most recent genuine human turn (skips tool_result wrapper messages)."""
+    for m in reversed(msgs):
+        if m.get('role') != 'user':
+            continue
+        content = m.get('content')
+        if isinstance(content, str):
+            return []
+        if isinstance(content, list):
+            if all(isinstance(b, dict) and b.get('type') == 'tool_result' for b in content):
+                continue
+            return [
+                {'media_type': b['source'].get('media_type', 'image/png'), 'data': b['source'].get('data', '')}
+                for b in content
+                if isinstance(b, dict) and b.get('type') == 'image' and isinstance(b.get('source'), dict)
+            ]
+        return []
+    return []
+
+
+def generate_image(prompt, input_images=None):
+    api_key = os.environ.get('GOOGLE_API_KEY')
+    if not api_key:
+        return {'error': 'GOOGLE_API_KEY לא מוגדר בשרת.'}
+
+    parts = []
+    for img in (input_images or []):
+        parts.append({'inline_data': {'mime_type': img['media_type'], 'data': img['data']}})
+    parts.append({'text': prompt})
+
+    try:
+        resp = http_requests.post(
+            f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_IMAGE_MODEL}:generateContent',
+            headers={'x-goog-api-key': api_key, 'Content-Type': 'application/json'},
+            json={'contents': [{'parts': parts}]},
+            timeout=60
+        )
+        data = resp.json()
+        candidates = data.get('candidates', [])
+        if not candidates:
+            err = data.get('error', {}).get('message', 'לא התקבלה תמונה מהמודל.')
+            return {'error': err}
+        for part in candidates[0].get('content', {}).get('parts', []):
+            inline = part.get('inlineData') or part.get('inline_data')
+            if inline and inline.get('data'):
+                mime = inline.get('mimeType') or inline.get('mime_type') or 'image/png'
+                return {'mime_type': mime, 'data': inline['data']}
+        return {'error': 'לא התקבלה תמונה מהמודל.'}
+    except Exception as e:
+        return {'error': f'שגיאת יצירת תמונה: {e}'}
+
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
@@ -135,6 +208,7 @@ def health():
         'claude': bool(os.environ.get('ANTHROPIC_API_KEY')),
         'search': bool(os.environ.get('TAVILY_API_KEY')),
         'transcribe': bool(os.environ.get('GROQ_API_KEY')),
+        'image': bool(os.environ.get('GOOGLE_API_KEY')),
         'auth': bool(API_KEY),
     })
 
@@ -193,49 +267,109 @@ def chat():
 
     system = SYSTEM_PROMPT_TEMPLATE.replace('{intro}', intro).replace('{facts_section}', facts_section)
 
-    try:
-        reply = call_claude(messages, system)
-        return jsonify({'reply': reply})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    def generate():
+        try:
+            for event in stream_claude(messages, system):
+                yield json.dumps(event, ensure_ascii=False) + '\n'
+        except Exception as e:
+            yield json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False) + '\n'
+
+    resp = Response(generate(), mimetype='application/x-ndjson')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
 
 
-def call_claude(messages, system):
+def stream_claude(messages, system):
+    """Streams the Claude conversation as a sequence of small event dicts.
+
+    Event types: delta, tool_start, image, pdf_start, pdf, error, done.
+    PDF blocks ([PDF:title]...[/PDF]) are detected server-side and never leaked
+    as raw markup — per system-prompt contract they are always the entire reply,
+    so the first ~5 chars of a turn's text decide whether it's a PDF turn.
+    """
     api_key = os.environ.get('ANTHROPIC_API_KEY')
     if not api_key:
-        raise Exception('ANTHROPIC_API_KEY לא מוגדר בשרת')
+        yield {'type': 'error', 'error': 'ANTHROPIC_API_KEY לא מוגדר בשרת'}
+        yield {'type': 'done'}
+        return
 
     client = anthropic.Anthropic(api_key=api_key)
     msgs = list(messages)
 
     for _ in range(5):
-        response = client.messages.create(
+        text_buf = ''
+        pdf_mode = None   # None = undetermined, False = plain text, True = pdf block
+        pdf_title = None
+
+        with client.messages.stream(
             model='claude-sonnet-5',
             max_tokens=5000,
             thinking={'type': 'disabled'},
             system=system,
             tools=TOOLS,
             messages=msgs
-        )
+        ) as stream:
+            for event in stream:
+                if event.type == 'content_block_start' and event.content_block.type == 'tool_use':
+                    yield {'type': 'tool_start', 'tool': event.content_block.name}
+                elif event.type == 'content_block_delta' and event.delta.type == 'text_delta':
+                    text_buf += event.delta.text
+                    if pdf_mode is None:
+                        if len(text_buf) >= 5:
+                            pdf_mode = text_buf.startswith('[PDF:')
+                            if not pdf_mode:
+                                yield {'type': 'delta', 'text': text_buf}
+                    elif pdf_mode is False:
+                        yield {'type': 'delta', 'text': event.delta.text}
+                    elif pdf_title is None:
+                        close_idx = text_buf.find(']')
+                        if close_idx != -1:
+                            pdf_title = text_buf[5:close_idx]
+                            yield {'type': 'pdf_start', 'title': pdf_title}
+            final = stream.get_final_message()
 
-        if response.stop_reason == 'tool_use':
-            tool_block = next(b for b in response.content if b.type == 'tool_use')
-            search_result = web_search(tool_block.input.get('query', ''))
+        if pdf_mode is None and text_buf:
+            yield {'type': 'delta', 'text': text_buf}
 
-            msgs.append({'role': 'assistant', 'content': response.content})
-            msgs.append({
-                'role': 'user',
-                'content': [{
-                    'type': 'tool_result',
-                    'tool_use_id': tool_block.id,
-                    'content': search_result
-                }]
-            })
-        else:
-            text_blocks = [b for b in response.content if hasattr(b, 'text')]
-            return text_blocks[0].text if text_blocks else ''
+        if final.stop_reason == 'tool_use':
+            tool_block = next(b for b in final.content if b.type == 'tool_use')
+            msgs.append({'role': 'assistant', 'content': final.content})
 
-    return 'לא הצלחתי לסיים את החיפוש.'
+            if tool_block.name == 'generate_image':
+                prompt_text = tool_block.input.get('prompt', '')
+                input_images = extract_last_user_images(msgs)
+                result = generate_image(prompt_text, input_images)
+                if 'error' in result:
+                    msgs.append({'role': 'user', 'content': [{
+                        'type': 'tool_result', 'tool_use_id': tool_block.id,
+                        'content': result['error'], 'is_error': True
+                    }]})
+                else:
+                    yield {'type': 'image', 'mime': result['mime_type'], 'data': result['data']}
+                    msgs.append({'role': 'user', 'content': [{
+                        'type': 'tool_result', 'tool_use_id': tool_block.id,
+                        'content': [
+                            {'type': 'image', 'source': {'type': 'base64', 'media_type': result['mime_type'], 'data': result['data']}},
+                            {'type': 'text', 'text': 'התמונה נוצרה בהצלחה והוצגה למשתמש.'}
+                        ]
+                    }]})
+            else:
+                search_result = web_search(tool_block.input.get('query', ''))
+                msgs.append({'role': 'user', 'content': [{
+                    'type': 'tool_result', 'tool_use_id': tool_block.id, 'content': search_result
+                }]})
+            continue
+
+        if pdf_mode:
+            match = PDF_RE.search(text_buf)
+            if match:
+                yield {'type': 'pdf', 'title': match.group(1).strip(), 'content': match.group(2).strip()}
+        yield {'type': 'done'}
+        return
+
+    yield {'type': 'error', 'error': 'לא הצלחתי לסיים את הבקשה.'}
+    yield {'type': 'done'}
 
 
 def ensure_hebrew_font():

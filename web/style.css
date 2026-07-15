@@ -210,12 +210,15 @@ header {
   background: var(--user-bubble);
   color: var(--user-text);
   border-bottom-left-radius: 5px;
+  box-shadow: 0 8px 20px -12px rgba(37, 99, 235, 0.55);
 }
 
 .msg-assistant {
   background: var(--assistant-bubble);
   border: 1px solid var(--border);
   border-bottom-right-radius: 5px;
+  box-shadow: 0 8px 20px -14px rgba(0, 0, 0, 0.5);
+  transition: border-color 0.2s;
 }
 
 .msg a { color: var(--accent); }
@@ -277,6 +280,58 @@ header {
   object-fit: cover;
   border-radius: 10px;
   border: 1px solid var(--border);
+}
+
+.msg-attachments.generated img {
+  width: 100%;
+  max-width: 280px;
+  height: auto;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+  box-shadow: 0 12px 28px -14px rgba(0, 0, 0, 0.55);
+}
+
+.msg-attachments.generated img:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 34px -14px rgba(56, 189, 248, 0.4);
+}
+
+.msg-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 6px 13px;
+  border-radius: 13px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  align-self: flex-start;
+  animation: statusPulse 1.6s infinite ease-in-out;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+.msg.streaming { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+
+.stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 15px;
+  margin-inline-start: 2px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: cursorBlink 0.85s steps(1) infinite;
+}
+
+@keyframes cursorBlink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
 }
 
 .msg-actions {
